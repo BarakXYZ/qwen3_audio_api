@@ -7,7 +7,7 @@ A high-performance Rust server that wraps [Qwen3-TTS](https://github.com/QwenLM/
 - **libtorch** (Linux) — PyTorch C++ runtime, CPU or CUDA GPU
 - **MLX** (macOS Apple Silicon) — Apple Metal GPU acceleration
 
-The release binaries statically link ffmpeg libraries — no system ffmpeg shared libraries are needed. Only the `ffmpeg` CLI binary is required at runtime for audio format conversion (MP3, Opus, AAC, FLAC output and non-WAV input to ASR).
+The release binaries are self-contained — ffmpeg is statically linked for audio format conversion (MP3, Opus, AAC, FLAC encoding and decoding of all common audio input formats). No external ffmpeg installation is required.
 
 ## Quick start with pre-built binaries
 
@@ -20,9 +20,6 @@ Pre-built binaries are available from [GitHub Releases](https://github.com/secon
 curl -LO https://github.com/second-state/qwen3_audio_api/releases/latest/download/qwen3-audio-api-linux-x86_64.tar.gz
 tar xzf qwen3-audio-api-linux-x86_64.tar.gz
 cd qwen3-audio-api-linux-x86_64
-
-# Install ffmpeg CLI (needed at runtime for audio format conversion)
-sudo apt-get install -y ffmpeg
 
 # Set libtorch library path (bundled in the archive)
 export LD_LIBRARY_PATH=$(pwd)/libtorch/lib:$LD_LIBRARY_PATH
@@ -44,9 +41,6 @@ TTS_CUSTOMVOICE_MODEL_PATH=/path/to/models/Qwen3-TTS-12Hz-0.6B-CustomVoice \
 curl -LO https://github.com/second-state/qwen3_audio_api/releases/latest/download/qwen3-audio-api-macos-arm64.tar.gz
 tar xzf qwen3-audio-api-macos-arm64.tar.gz
 cd qwen3-audio-api-macos-arm64
-
-# Install ffmpeg CLI (needed at runtime for audio format conversion)
-brew install ffmpeg
 
 # Download models (see "Download models" section below)
 # ...
@@ -262,30 +256,26 @@ The `voice` field accepts OpenAI voice names (mapped to Qwen3-TTS speakers) or Q
 
 ## Output formats
 
-| Format | Content-Type | Requires ffmpeg CLI |
-|--------|-------------|---------------------|
-| `wav` | `audio/wav` | No |
-| `pcm` | `audio/pcm` | No |
-| `mp3` | `audio/mpeg` | Yes |
-| `opus` | `audio/opus` | Yes |
-| `aac` | `audio/aac` | Yes |
-| `flac` | `audio/flac` | Yes |
+| Format | Content-Type |
+|--------|-------------|
+| `wav` | `audio/wav` |
+| `pcm` | `audio/pcm` |
+| `mp3` | `audio/mpeg` |
+| `opus` | `audio/opus` |
+| `aac` | `audio/aac` |
+| `flac` | `audio/flac` |
 
-> WAV and PCM output are handled natively. Other formats use the `ffmpeg` CLI for encoding.
+All formats are handled natively by the statically-linked ffmpeg library. No external tools are needed.
 
 ## Building from source
 
-ffmpeg is built from source and statically linked by default (via the `build-ffmpeg` feature). You do **not** need ffmpeg development libraries installed — only build tools.
+ffmpeg is built from source and statically linked by default (via the `build-ffmpeg` feature). You do **not** need ffmpeg installed.
 
 ### Linux (libtorch backend)
 
 ```bash
 # Install build dependencies
-# nasm and libclang-dev are needed to compile the statically-linked ffmpeg
 sudo apt-get install -y cmake pkg-config nasm libclang-dev
-
-# Install ffmpeg CLI (needed at runtime for audio format conversion)
-sudo apt-get install -y ffmpeg
 
 # Download libtorch (CPU)
 wget -q "https://download.pytorch.org/libtorch/cpu/libtorch-cxx11-abi-shared-with-deps-2.7.0%2Bcpu.zip" -O libtorch.zip
@@ -307,9 +297,6 @@ cargo build --release
 ```bash
 # Install build dependencies
 brew install cmake
-
-# Install ffmpeg CLI (needed at runtime for audio format conversion)
-brew install ffmpeg
 
 # Build with MLX (ffmpeg is compiled from source and statically linked)
 cd rust

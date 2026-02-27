@@ -4,9 +4,8 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde::Serialize;
 use std::io::Write;
-use std::process::Command;
-use tempfile::NamedTempFile;
 
+use crate::audio::convert_audio_to_wav_bytes;
 use crate::error::ApiError;
 use crate::state::AppState;
 
@@ -78,8 +77,18 @@ pub async fn transcribe(
         .map(|(_, ext)| format!(".{ext}"))
         .unwrap_or_else(|| ".wav".to_string());
 
-    // Convert audio to WAV via ffmpeg (mono, 16kHz, s16)
-    let wav_path = convert_audio_to_wav(&file_bytes, &suffix)?;
+    // Convert audio to WAV (mono, 16kHz, s16) using the statically-linked ffmpeg library
+    let wav_bytes = convert_audio_to_wav_bytes(&file_bytes, &suffix, 16000)?;
+
+    // Write WAV to a temp file for ASR inference
+    let mut wav_file = tempfile::Builder::new()
+        .suffix(".wav")
+        .tempfile()
+        .map_err(|e| ApiError::internal(format!("Failed to create WAV temp file: {e}")))?;
+    wav_file
+        .write_all(&wav_bytes)
+        .map_err(|e| ApiError::internal(format!("Failed to write WAV temp file: {e}")))?;
+    let wav_path = wav_file.path().to_string_lossy().to_string();
 
     // Run inference in blocking task
     let lang = language.clone();
@@ -110,62 +119,9 @@ pub async fn transcribe(
     .await
     .map_err(|e| ApiError::internal(format!("Task join error: {e}")))??;
 
-    // Clean up temp files
-    let _ = std::fs::remove_file(&wav_path);
-
     if response_format == "text" {
         Ok(([(header::CONTENT_TYPE, "text/plain")], text).into_response())
     } else {
         Ok(Json(TranscriptionResponse { text }).into_response())
     }
-}
-
-/// Convert audio bytes to a WAV temp file using ffmpeg.
-/// Returns the path to the temporary WAV file.
-fn convert_audio_to_wav(audio_bytes: &[u8], suffix: &str) -> Result<String, ApiError> {
-    // Write source audio to a temp file with original suffix
-    let mut src_file = tempfile::Builder::new()
-        .suffix(suffix)
-        .tempfile()
-        .map_err(|e| ApiError::internal(format!("Failed to create temp file: {e}")))?;
-    src_file
-        .write_all(audio_bytes)
-        .map_err(|e| ApiError::internal(format!("Failed to write temp file: {e}")))?;
-    let src_path = src_file.path().to_string_lossy().to_string();
-
-    // Create output WAV temp file
-    let wav_file = NamedTempFile::new()
-        .map_err(|e| ApiError::internal(format!("Failed to create WAV temp file: {e}")))?;
-    let wav_path = format!("{}.wav", wav_file.path().to_string_lossy());
-    // We use a separate path so ffmpeg can write to it
-    drop(wav_file);
-
-    let output = Command::new("ffmpeg")
-        .args([
-            "-hide_banner",
-            "-loglevel",
-            "error",
-            "-y",
-            "-i",
-            &src_path,
-            "-ac",
-            "1",
-            "-ar",
-            "16000",
-            "-sample_fmt",
-            "s16",
-            &wav_path,
-        ])
-        .output()
-        .map_err(|e| ApiError::internal(format!("Failed to run ffmpeg: {e}")))?;
-
-    if !output.status.success() {
-        let _ = std::fs::remove_file(&wav_path);
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(ApiError::internal(format!(
-            "ffmpeg audio conversion failed: {stderr}"
-        )));
-    }
-
-    Ok(wav_path)
 }

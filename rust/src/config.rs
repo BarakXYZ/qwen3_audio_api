@@ -127,6 +127,17 @@ impl ResponseFormat {
             Self::Pcm => "audio/pcm",
         }
     }
+
+    pub fn extension(&self) -> &'static str {
+        match self {
+            Self::Mp3 => ".mp3",
+            Self::Opus => ".ogg",
+            Self::Aac => ".aac",
+            Self::Flac => ".flac",
+            Self::Wav => ".wav",
+            Self::Pcm => ".pcm",
+        }
+    }
 }
 
 impl Default for ResponseFormat {
