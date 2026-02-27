@@ -40,7 +40,10 @@ tempfile = "3"
 qwen3_tts = { git = "https://github.com/second-state/qwen3_tts_rs.git", default-features = false }
 qwen3_asr = { git = "https://github.com/second-state/qwen3_asr_rs.git", default-features = false }
 
+# PyTorch bindings (optional, only for tch-backend CUDA detection)
+tch = { version = "0.20", optional = true }
+
 [features]
 default = ["tch-backend"]
-tch-backend = ["qwen3_tts/tch-backend", "qwen3_asr/tch-backend"]
+tch-backend = ["qwen3_tts/tch-backend", "qwen3_asr/tch-backend", "tch"]
 mlx = ["qwen3_tts/mlx", "qwen3_asr/mlx"]
