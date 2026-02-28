@@ -16,6 +16,7 @@ jobs:
     env:
       LIBTORCH_VERSION: "2.7.0"
       LIBTORCH_BYPASS_VERSION_CHECK: "1"
+      STATIC_LIBS: /tmp/static-libs
 
     steps:
       - uses: actions/checkout@v4
@@ -26,12 +27,27 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update && sudo apt-get install -y cmake pkg-config \
-            nasm libclang-dev libmp3lame-dev libopus-dev
+            nasm libclang-dev
 
-      - name: Force static linking of lame and opus
+      - name: Build static lame
         run: |
-          sudo rm -f /usr/lib/x86_64-linux-gnu/libmp3lame*.so*
-          sudo rm -f /usr/lib/x86_64-linux-gnu/libopus*.so*
+          curl -L -o lame-3.100.tar.gz \
+            'https://sourceforge.net/projects/lame/files/lame/3.100/lame-3.100.tar.gz/download'
+          tar xzf lame-3.100.tar.gz
+          cd lame-3.100
+          ./configure --prefix=$STATIC_LIBS --enable-static --disable-shared \
+            --enable-nasm --disable-frontend
+          make -j$(nproc)
+          make install
+
+      - name: Build static opus
+        run: |
+          curl -LO https://downloads.xiph.org/releases/opus/opus-1.5.2.tar.gz
+          tar xzf opus-1.5.2.tar.gz
+          cd opus-1.5.2
+          ./configure --prefix=$STATIC_LIBS --enable-static --disable-shared
+          make -j$(nproc)
+          make install
 
       - name: Cache libtorch
         id: cache-libtorch
@@ -59,11 +75,16 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             rust/target
-          key: cargo-release-linux-v2-${{ hashFiles('rust/Cargo.toml') }}
-          restore-keys: cargo-release-linux-v2-
+          key: cargo-release-linux-v3-${{ hashFiles('rust/Cargo.toml') }}
+          restore-keys: cargo-release-linux-v3-
 
       - name: Build
         working-directory: rust
+        env:
+          PKG_CONFIG_PATH: /tmp/static-libs/lib/pkgconfig
+          CFLAGS: "-I/tmp/static-libs/include"
+          LDFLAGS: "-L/tmp/static-libs/lib"
+          LIBRARY_PATH: /tmp/static-libs/lib
         run: cargo build --release
 
       - name: Verify no dynamic lame/opus dependency
@@ -93,6 +114,9 @@ jobs:
     runs-on: macos-14
     timeout-minutes: 60
 
+    env:
+      STATIC_LIBS: /tmp/static-libs
+
     steps:
       - uses: actions/checkout@v4
 
@@ -100,12 +124,27 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Install system dependencies
-        run: brew install cmake pkg-config nasm lame opus
+        run: brew install cmake pkg-config nasm
 
-      - name: Force static linking of lame and opus
+      - name: Build static lame
         run: |
-          rm -f /opt/homebrew/lib/libmp3lame*.dylib
-          rm -f /opt/homebrew/lib/libopus*.dylib
+          curl -L -o lame-3.100.tar.gz \
+            'https://sourceforge.net/projects/lame/files/lame/3.100/lame-3.100.tar.gz/download'
+          tar xzf lame-3.100.tar.gz
+          cd lame-3.100
+          ./configure --prefix=$STATIC_LIBS --enable-static --disable-shared \
+            --disable-frontend
+          make -j$(sysctl -n hw.ncpu)
+          make install
+
+      - name: Build static opus
+        run: |
+          curl -LO https://downloads.xiph.org/releases/opus/opus-1.5.2.tar.gz
+          tar xzf opus-1.5.2.tar.gz
+          cd opus-1.5.2
+          ./configure --prefix=$STATIC_LIBS --enable-static --disable-shared
+          make -j$(sysctl -n hw.ncpu)
+          make install
 
       - name: Cache cargo registry & build
         uses: actions/cache@v4
@@ -114,15 +153,16 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             rust/target
-          key: cargo-release-macos-arm64-v2-${{ hashFiles('rust/Cargo.toml') }}
-          restore-keys: cargo-release-macos-arm64-v2-
+          key: cargo-release-macos-arm64-v3-${{ hashFiles('rust/Cargo.toml') }}
+          restore-keys: cargo-release-macos-arm64-v3-
 
       - name: Build with MLX backend
         working-directory: rust
         env:
-          CFLAGS: "-I/opt/homebrew/include"
-          LDFLAGS: "-L/opt/homebrew/lib"
-          LIBRARY_PATH: "/opt/homebrew/lib"
+          PKG_CONFIG_PATH: /tmp/static-libs/lib/pkgconfig
+          CFLAGS: "-I/tmp/static-libs/include"
+          LDFLAGS: "-L/tmp/static-libs/lib"
+          LIBRARY_PATH: /tmp/static-libs/lib
         run: cargo build --release --no-default-features --features "mlx build-ffmpeg"
 
       - name: Verify no dynamic lame/opus dependency
