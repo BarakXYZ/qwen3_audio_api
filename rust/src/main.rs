@@ -22,6 +22,9 @@ use qwen3_tts::tensor::Device as TtsDevice;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // Load .env file if present (silently ignored if missing)
+    dotenvy::dotenv().ok();
+
     // Initialize logging
     fmt()
         .with_env_filter(

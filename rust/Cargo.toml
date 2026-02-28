@@ -25,6 +25,9 @@ hound = "3.5"
 # Encoding
 base64 = "0.22"
 
+# Environment
+dotenvy = "0.15"
+
 # Error handling
 thiserror = "2.0"
 anyhow = "1.0"
