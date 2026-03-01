@@ -98,6 +98,95 @@ jobs:
           name: linux-x86_64
           path: qwen3-audio-api-linux-x86_64.tar.gz
 
+  build-linux-arm:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
+
+    env:
+      LIBTORCH_VERSION: "2.7.1"
+      LIBTORCH_BYPASS_VERSION_CHECK: "1"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update && sudo apt-get install -y cmake pkg-config \
+            nasm libclang-dev libmp3lame-dev libopus-dev patchelf
+
+      - name: Cache libtorch
+        id: cache-libtorch
+        uses: actions/cache@v4
+        with:
+          path: libtorch
+          key: libtorch-cpu-aarch64-${{ env.LIBTORCH_VERSION }}
+
+      - name: Download libtorch
+        if: steps.cache-libtorch.outputs.cache-hit != 'true'
+        run: |
+          wget -q "https://github.com/second-state/libtorch-releases/releases/download/v${LIBTORCH_VERSION}/libtorch-cxx11-abi-aarch64-${LIBTORCH_VERSION}.tar.gz" -O libtorch.tar.gz
+          tar xzf libtorch.tar.gz
+          rm libtorch.tar.gz
+
+      - name: Set libtorch environment
+        run: |
+          echo "LIBTORCH=$(pwd)/libtorch" >> $GITHUB_ENV
+          echo "LD_LIBRARY_PATH=$(pwd)/libtorch/lib:$LD_LIBRARY_PATH" >> $GITHUB_ENV
+
+      - name: Cache cargo registry & build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust/target
+          key: cargo-release-linux-aarch64-v6-${{ hashFiles('rust/Cargo.toml') }}
+          restore-keys: cargo-release-linux-aarch64-v6-
+
+      - name: Build
+        working-directory: rust
+        run: cargo build --release
+
+      - name: Package archive
+        run: |
+          mkdir -p staging/qwen3-audio-api-linux-aarch64/lib
+
+          # Copy binary
+          cp rust/target/release/qwen3-audio-api staging/qwen3-audio-api-linux-aarch64/
+
+          # Bundle libtorch
+          cp -r libtorch staging/qwen3-audio-api-linux-aarch64/
+
+          # Bundle lame/opus shared libraries if dynamically linked
+          for lib in mp3lame opus; do
+            so_file=$(ldd rust/target/release/qwen3-audio-api | grep "lib${lib}" | awk '{print $3}')
+            if [ -n "$so_file" ] && [ -f "$so_file" ]; then
+              echo "Bundling $so_file"
+              cp "$so_file" staging/qwen3-audio-api-linux-aarch64/lib/
+            fi
+          done
+
+          # Set RPATH so binary finds bundled libs at runtime
+          patchelf --set-rpath '$ORIGIN/lib:$ORIGIN/libtorch/lib' \
+            staging/qwen3-audio-api-linux-aarch64/qwen3-audio-api
+
+          # Verify
+          echo "=== Bundled libraries ==="
+          ls -la staging/qwen3-audio-api-linux-aarch64/lib/ || echo "(no extra libs needed)"
+          echo "=== RPATH ==="
+          patchelf --print-rpath staging/qwen3-audio-api-linux-aarch64/qwen3-audio-api
+
+          tar -czf qwen3-audio-api-linux-aarch64.tar.gz -C staging qwen3-audio-api-linux-aarch64
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-aarch64
+          path: qwen3-audio-api-linux-aarch64.tar.gz
+
   build-macos:
     runs-on: macos-14
     timeout-minutes: 60
@@ -178,7 +267,7 @@ jobs:
           path: qwen3-audio-api-macos-arm64.tar.gz
 
   release:
-    needs: [build-linux, build-macos]
+    needs: [build-linux, build-linux-arm, build-macos]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -188,6 +277,11 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: linux-x86_64
+
+      - name: Download Linux ARM artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: linux-aarch64
 
       - name: Download macOS artifact
         uses: actions/download-artifact@v4
@@ -200,4 +294,5 @@ jobs:
           generate_release_notes: true
           files: |
             qwen3-audio-api-linux-x86_64.tar.gz
+            qwen3-audio-api-linux-aarch64.tar.gz
             qwen3-audio-api-macos-arm64.tar.gz
