@@ -300,9 +300,9 @@ Download and extract libtorch for your platform:
 curl -LO https://download.pytorch.org/libtorch/cpu/libtorch-cxx11-abi-shared-with-deps-2.7.1%2Bcpu.zip
 unzip libtorch-cxx11-abi-shared-with-deps-2.7.1+cpu.zip
 
-# Linux x86_64 (CUDA 12.4)
-curl -LO https://download.pytorch.org/libtorch/cu124/libtorch-cxx11-abi-shared-with-deps-2.7.0%2Bcu124.zip
-unzip libtorch-cxx11-abi-shared-with-deps-2.7.0+cu124.zip
+# Linux x86_64 (CUDA 12.6)
+curl -LO https://download.pytorch.org/libtorch/cu126/libtorch-cxx11-abi-shared-with-deps-2.7.0%2Bcu126.zip
+unzip libtorch-cxx11-abi-shared-with-deps-2.7.0+cu126.zip
 
 # Linux aarch64 (CPU)
 curl -LO https://github.com/second-state/libtorch-releases/releases/download/v2.7.1/libtorch-cxx11-abi-aarch64-2.7.1.tar.gz

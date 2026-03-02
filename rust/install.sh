@@ -119,7 +119,7 @@ download_cuda_libtorch() {
     fi
 
     info "Downloading CUDA libtorch (this may take a while)..."
-    local url="https://download.pytorch.org/libtorch/cu124/libtorch-cxx11-abi-shared-with-deps-2.7.0%2Bcu124.zip"
+    local url="https://download.pytorch.org/libtorch/cu126/libtorch-cxx11-abi-shared-with-deps-2.7.0%2Bcu126.zip"
     local temp_dir
     temp_dir=$(mktemp -d)
 

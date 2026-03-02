@@ -91,7 +91,7 @@ jobs:
     env:
       LIBTORCH_VERSION: "2.7.0"
       LIBTORCH_BYPASS_VERSION_CHECK: "1"
-      CUDA_VERSION: "cu124"
+      CUDA_VERSION: "cu126"
 
     steps:
       - uses: actions/checkout@v4
