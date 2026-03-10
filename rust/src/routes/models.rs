@@ -6,7 +6,7 @@ use crate::state::AppState;
 
 #[derive(Serialize)]
 struct ModelInfo {
-    id: &'static str,
+    id: String,
     object: &'static str,
     owned_by: &'static str,
 }
@@ -17,21 +17,38 @@ struct ModelsResponse {
     data: Vec<ModelInfo>,
 }
 
+/// List the concrete model families currently resident in memory.
 pub async fn list_models(State(state): State<AppState>) -> impl axum::response::IntoResponse {
-    let models = state.lock().unwrap();
+    let inventory = state.loaded_models();
     let mut data = Vec::new();
 
-    if models.custom_voice.is_some() || models.base_model.is_some() {
+    if let Some(id) = inventory.custom_voice_model_id {
         data.push(ModelInfo {
-            id: "qwen3-tts",
+            id,
             object: "model",
             owned_by: "qwen",
         });
     }
 
-    if models.asr.is_some() {
+    if let Some(id) = inventory.instruction_custom_voice_model_id {
         data.push(ModelInfo {
-            id: "qwen3-asr",
+            id,
+            object: "model",
+            owned_by: "qwen",
+        });
+    }
+
+    if let Some(id) = inventory.base_model_id {
+        data.push(ModelInfo {
+            id,
+            object: "model",
+            owned_by: "qwen",
+        });
+    }
+
+    if let Some(id) = inventory.asr_model_id {
+        data.push(ModelInfo {
+            id,
             object: "model",
             owned_by: "qwen",
         });

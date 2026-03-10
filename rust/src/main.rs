@@ -2,6 +2,7 @@ mod audio;
 mod config;
 mod error;
 mod routes;
+mod runtime;
 mod state;
 
 use axum::routing::{get, post};
@@ -12,13 +13,12 @@ use tower_http::trace::TraceLayer;
 use tracing_subscriber::{fmt, EnvFilter};
 
 use config::ServerConfig;
-use state::{new_app_state, Models};
+use runtime::{build_tts_runtime, RuntimeMetadata, RuntimeStatus};
+use state::AppState;
 
 use qwen3_asr::inference::AsrInference;
-use qwen3_tts::audio_encoder::AudioEncoder;
-use qwen3_tts::inference::TTSInference;
-use qwen3_tts::speaker_encoder::SpeakerEncoder;
 use qwen3_tts::tensor::Device as TtsDevice;
+use std::sync::{Arc, Mutex};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -34,6 +34,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Parse configuration from environment variables
     let config = ServerConfig::from_env().map_err(|e| anyhow::anyhow!("{}", e))?;
+    let transport_label = resolve_transport_label(&config);
 
     // Determine TTS device based on backend
     #[cfg(feature = "tch-backend")]
@@ -46,6 +47,12 @@ async fn main() -> anyhow::Result<()> {
             TtsDevice::Cpu
         }
     };
+    #[cfg(feature = "tch-backend")]
+    let backend_label = if tch::Cuda::is_available() {
+        "cuda"
+    } else {
+        "cpu"
+    };
 
     #[cfg(feature = "mlx")]
     let tts_device = {
@@ -53,53 +60,26 @@ async fn main() -> anyhow::Result<()> {
         tracing::info!("TTS using MLX Metal GPU");
         TtsDevice::Gpu(0)
     };
+    #[cfg(feature = "mlx")]
+    let backend_label = "metal-mlx";
 
-    // Load models
-    let mut models = Models {
-        custom_voice: None,
-        base_model: None,
-        speaker_encoder: None,
-        audio_encoder: None,
-        asr: None,
-    };
+    let (tts, runtime_metadata) =
+        match build_tts_runtime(&config, tts_device, backend_label, &transport_label)? {
+            Some((tts, runtime_metadata)) => (Some(tts), runtime_metadata),
+            None => (
+                None,
+                RuntimeMetadata {
+                    backend: backend_label.to_string(),
+                    transport: transport_label.clone(),
+                    loaded_at: std::time::SystemTime::now(),
+                    status: Arc::new(Mutex::new(RuntimeStatus::ResidentHot)),
+                    last_error: Arc::new(Mutex::new(None)),
+                },
+            ),
+        };
 
-    if let Some(ref path) = config.tts_customvoice_model_path {
-        tracing::info!("Loading CustomVoice TTS model from {}", path);
-        let inference = TTSInference::new(Path::new(path), tts_device)?;
-        tracing::info!("CustomVoice TTS model loaded successfully");
-        models.custom_voice = Some(inference);
-    }
-
-    if let Some(ref path) = config.tts_base_model_path {
-        tracing::info!("Loading Base TTS model from {}", path);
-        let inference = TTSInference::new(Path::new(path), tts_device)?;
-
-        // Load speaker encoder from base model weights
-        let se_config = inference.config().speaker_encoder_config.clone();
-        let speaker_encoder =
-            SpeakerEncoder::load(inference.weights(), &se_config, tts_device)?;
-        tracing::info!("Speaker encoder loaded");
-
-        // Load audio encoder for ICL voice cloning (if speech_tokenizer exists)
-        let speech_tokenizer_path = Path::new(path)
-            .join("speech_tokenizer")
-            .join("model.safetensors");
-        if speech_tokenizer_path.exists() {
-            let audio_encoder = AudioEncoder::load(&speech_tokenizer_path, tts_device)?;
-            tracing::info!("Audio encoder loaded for ICL mode");
-            models.audio_encoder = Some(audio_encoder);
-        } else {
-            tracing::warn!(
-                "speech_tokenizer not found at {}; ICL voice cloning will not be available",
-                speech_tokenizer_path.display()
-            );
-        }
-
-        models.speaker_encoder = Some(speaker_encoder);
-        models.base_model = Some(inference);
-        tracing::info!("Base TTS model loaded successfully");
-    }
-
+    // Load ASR separately so speech traffic does not share its queue.
+    let mut asr = None;
     if let Some(ref path) = config.asr_model_path {
         tracing::info!("Loading ASR model from {}", path);
         let model_dir = Path::new(path);
@@ -123,12 +103,16 @@ async fn main() -> anyhow::Result<()> {
             qwen3_asr::tensor::Device::Gpu(0)
         };
 
-        let asr = AsrInference::load(model_dir, asr_device)?;
+        let loaded_asr = AsrInference::load(model_dir, asr_device)?;
         tracing::info!("ASR model loaded successfully");
-        models.asr = Some(asr);
+        asr = Some(Arc::new(Mutex::new(loaded_asr)));
     }
 
-    let state = new_app_state(models);
+    let state = AppState {
+        tts,
+        asr,
+        runtime: runtime_metadata,
+    };
 
     // Build router
     let app = Router::new()
@@ -139,17 +123,49 @@ async fn main() -> anyhow::Result<()> {
         )
         .route("/v1/models", get(routes::models::list_models))
         .route("/health", get(routes::health::health))
+        .route("/health/details", get(routes::health::health_details))
+        .route("/metrics", get(routes::health::metrics))
         .layer(TraceLayer::new_for_http())
         .with_state(state);
 
-    // Start server
+    // Start server on the configured local transport.
+    if let Some(socket_path) = config.socket_path.clone() {
+        #[cfg(unix)]
+        {
+            let socket_file = Path::new(&socket_path);
+            if let Some(parent) = socket_file.parent() {
+                tokio::fs::create_dir_all(parent).await?;
+            }
+            let _ = tokio::fs::remove_file(socket_file).await;
+            let listener = tokio::net::UnixListener::bind(socket_file)?;
+            tracing::info!("Server listening on unix socket {}", socket_file.display());
+            axum::serve(listener, app).await?;
+            return Ok(());
+        }
+
+        #[cfg(not(unix))]
+        {
+            return Err(anyhow::anyhow!(
+                "SOCKET_PATH is only supported on Unix platforms in this build."
+            ));
+        }
+    }
+
     let addr: SocketAddr = format!("{}:{}", config.host, config.port)
         .parse()
         .expect("Invalid bind address");
     tracing::info!("Server listening on {}", addr);
-
     let listener = tokio::net::TcpListener::bind(addr).await?;
     axum::serve(listener, app).await?;
 
     Ok(())
+}
+
+/// Build the transport label that is surfaced by health/details responses.
+fn resolve_transport_label(config: &ServerConfig) -> String {
+    if let Some(socket_path) = config.socket_path.as_ref() {
+        return format!("unix:{socket_path}");
+    }
+
+    format!("tcp:{}:{}", config.host, config.port)
 }

@@ -30,6 +30,13 @@ impl ApiError {
             message: msg.into(),
         }
     }
+
+    pub fn service_unavailable(msg: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::SERVICE_UNAVAILABLE,
+            message: msg.into(),
+        }
+    }
 }
 
 impl IntoResponse for ApiError {

@@ -1,6 +1,6 @@
 # Qwen3-TTS/ASR OpenAI-Compatible API (Rust)
 
-A high-performance Rust server that wraps [Qwen3-TTS](https://github.com/QwenLM/Qwen3-TTS) and [Qwen3-ASR](https://github.com/QwenLM/Qwen3-ASR) behind OpenAI-compatible endpoints. Any client that speaks the OpenAI audio API can point at this server and get text-to-speech and speech-to-text from Qwen3 models.
+A high-performance Rust server that wraps [Qwen3-TTS](https://github.com/QwenLM/Qwen3-TTS) and [Qwen3-ASR](https://github.com/QwenLM/Qwen3-ASR) behind OpenAI-compatible endpoints. Any client that speaks the OpenAI audio API can point at this server and get resident text-to-speech and speech-to-text from Qwen3 models.
 
 **Backends:**
 
@@ -8,6 +8,18 @@ A high-performance Rust server that wraps [Qwen3-TTS](https://github.com/QwenLM/
 - **MLX** (macOS Apple Silicon) — Apple Metal GPU acceleration
 
 The release binaries are self-contained — ffmpeg is statically linked for audio format conversion (MP3, Opus, AAC, FLAC encoding and decoding of all common audio input formats). No external ffmpeg installation is required.
+
+## Runtime behavior
+
+- TTS models are loaded eagerly at startup and kept resident in memory.
+- TTS inference runs through a single bounded worker queue so requests are serialized intentionally rather than competing through a coarse global lock.
+- `/health`, `/health/details`, and `/metrics` report real runtime state, loaded models, queue depth, and worker counters.
+- Unix domain sockets are supported with `SOCKET_PATH` for local-only deployments on macOS/Linux.
+
+### Important current limitations
+
+- VoiceDesign is **not** exposed by the resident Rust runtime yet because the current `qwen3_tts_rs` inference stack does not provide a production-ready VoiceDesign path.
+- Audio responses are currently **batch** responses. The server does not claim first-audio streaming until the underlying inference engine exposes a real incremental audio API.
 
 ## Quick Start
 
@@ -48,13 +60,16 @@ curl -X POST http://localhost:8000/v1/audio/transcriptions \
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `TTS_CUSTOMVOICE_MODEL_PATH` | -- | Path to CustomVoice model directory (enables `voice`/`instructions` parameters) |
+| `TTS_INSTRUCTION_MODEL_PATH` | -- | Path to the 1.7B CustomVoice model used for instruction-heavy preset speaker synthesis |
 | `TTS_BASE_MODEL_PATH` | -- | Path to Base model directory (enables `audio_sample` voice cloning) |
 | `ASR_MODEL_PATH` | -- | Path to ASR model directory (enables `/v1/audio/transcriptions`) |
-| `HOST` | `0.0.0.0` | Server bind address |
+| `HOST` | `127.0.0.1` | TCP bind address |
 | `PORT` | `8000` | Server port |
+| `SOCKET_PATH` | -- | Unix domain socket path. When set, the server listens on the socket instead of TCP |
+| `QUEUE_CAPACITY` | `8` | Maximum queued TTS synthesis requests before the runtime starts rejecting with 503 |
 | `RUST_LOG` | `info` | Log level (`trace`, `debug`, `info`, `warn`, `error`) |
 
-At least one of `TTS_CUSTOMVOICE_MODEL_PATH`, `TTS_BASE_MODEL_PATH`, or `ASR_MODEL_PATH` must be set.
+At least one of `TTS_CUSTOMVOICE_MODEL_PATH`, `TTS_INSTRUCTION_MODEL_PATH`, `TTS_BASE_MODEL_PATH`, or `ASR_MODEL_PATH` must be set.
 
 **Example — all models loaded:**
 
@@ -87,7 +102,7 @@ Generate speech from text. Compatible with the [OpenAI audio speech API](https:/
 
 > **Note:** The endpoint accepts both JSON and multipart/form-data. Use multipart (`curl -F`) to upload `audio_sample` as a binary file — this avoids base64 encoding. JSON requests can pass `audio_sample` as a base64-encoded string.
 >
-> When `audio_sample` is provided the request uses the **Base** model for voice cloning and `voice`/`instructions` are ignored. When `audio_sample` is omitted the request uses the **CustomVoice** model and requires a valid `voice`. If the required model is not loaded the server returns HTTP 400.
+> When `audio_sample` is provided the request uses the **Base** model for voice cloning and `voice`/`instructions` are ignored. When `audio_sample` is omitted the request uses the **CustomVoice** model and requires a valid `voice`. If `instructions` are supplied, the runtime prefers `TTS_INSTRUCTION_MODEL_PATH` and falls back to `TTS_CUSTOMVOICE_MODEL_PATH` if the instruction model is not configured. Style-only requests without `voice` are rejected explicitly instead of silently falling back to a preset speaker.
 
 **Response:** The raw audio bytes with the appropriate `Content-Type` header.
 
@@ -170,11 +185,24 @@ curl http://localhost:8000/v1/models
 
 ### `GET /health`
 
-Returns `{"status": "ok"}` when the server is ready.
+Returns a structured runtime health payload. Status code is:
+
+- `200` when the runtime is `resident_hot`
+- `202` when the runtime is still `starting`
+- `503` when the runtime is `degraded`
+- `500` when the runtime is in `error`
 
 ```bash
 curl http://localhost:8000/health
 ```
+
+### `GET /health/details`
+
+Returns the same structured payload as `/health` for management tooling that wants a dedicated details endpoint.
+
+### `GET /metrics`
+
+Returns JSON runtime metrics including queue depth, queue capacity, active request count, completed/failed request counters, and worker-failure counters.
 
 ## Voices
 

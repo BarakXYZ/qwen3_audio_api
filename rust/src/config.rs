@@ -5,14 +5,20 @@ use std::collections::{HashMap, HashSet};
 pub struct ServerConfig {
     /// Path to CustomVoice model directory (TTS_CUSTOMVOICE_MODEL_PATH)
     pub tts_customvoice_model_path: Option<String>,
+    /// Path to the 1.7B instruction CustomVoice model (TTS_INSTRUCTION_MODEL_PATH)
+    pub tts_instruction_model_path: Option<String>,
     /// Path to Base model directory for voice cloning (TTS_BASE_MODEL_PATH)
     pub tts_base_model_path: Option<String>,
     /// Path to ASR model directory (ASR_MODEL_PATH)
     pub asr_model_path: Option<String>,
-    /// Bind address (HOST, default: 0.0.0.0)
+    /// Bind address (HOST, default: 127.0.0.1)
     pub host: String,
     /// Port (PORT, default: 8000)
     pub port: u16,
+    /// Optional Unix domain socket path (SOCKET_PATH)
+    pub socket_path: Option<String>,
+    /// Maximum number of queued synthesis requests (QUEUE_CAPACITY, default: 8)
+    pub queue_capacity: usize,
 }
 
 impl ServerConfig {
@@ -22,28 +28,41 @@ impl ServerConfig {
             tts_customvoice_model_path: std::env::var("TTS_CUSTOMVOICE_MODEL_PATH")
                 .ok()
                 .filter(|s| !s.is_empty()),
+            tts_instruction_model_path: std::env::var("TTS_INSTRUCTION_MODEL_PATH")
+                .ok()
+                .filter(|s| !s.is_empty()),
             tts_base_model_path: std::env::var("TTS_BASE_MODEL_PATH")
                 .ok()
                 .filter(|s| !s.is_empty()),
             asr_model_path: std::env::var("ASR_MODEL_PATH")
                 .ok()
                 .filter(|s| !s.is_empty()),
-            host: std::env::var("HOST").unwrap_or_else(|_| "0.0.0.0".to_string()),
+            host: std::env::var("HOST").unwrap_or_else(|_| "127.0.0.1".to_string()),
             port: std::env::var("PORT")
                 .ok()
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(8000),
+            socket_path: std::env::var("SOCKET_PATH").ok().filter(|s| !s.is_empty()),
+            queue_capacity: std::env::var("QUEUE_CAPACITY")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(8),
         };
 
         if config.tts_customvoice_model_path.is_none()
+            && config.tts_instruction_model_path.is_none()
             && config.tts_base_model_path.is_none()
             && config.asr_model_path.is_none()
         {
             return Err(
-                "At least one of TTS_CUSTOMVOICE_MODEL_PATH, TTS_BASE_MODEL_PATH, \
+                "At least one of TTS_CUSTOMVOICE_MODEL_PATH, TTS_INSTRUCTION_MODEL_PATH, TTS_BASE_MODEL_PATH, \
                  or ASR_MODEL_PATH must be set."
                     .to_string(),
             );
+        }
+
+        if config.queue_capacity == 0 {
+            return Err("QUEUE_CAPACITY must be at least 1.".to_string());
         }
 
         Ok(config)
@@ -72,15 +91,7 @@ fn voice_map() -> HashMap<&'static str, &'static str> {
 /// Valid Qwen3-TTS speaker names.
 fn qwen_speakers() -> HashSet<&'static str> {
     HashSet::from([
-        "Vivian",
-        "Serena",
-        "Uncle_Fu",
-        "Dylan",
-        "Eric",
-        "Ryan",
-        "Aiden",
-        "Ono_Anna",
-        "Sohee",
+        "Vivian", "Serena", "Uncle_Fu", "Dylan", "Eric", "Ryan", "Aiden", "Ono_Anna", "Sohee",
     ])
 }
 
@@ -143,5 +154,27 @@ impl ResponseFormat {
 impl Default for ResponseFormat {
     fn default() -> Self {
         Self::Mp3
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_voice;
+
+    #[test]
+    fn resolves_openai_voice_aliases() {
+        assert_eq!(resolve_voice("alloy").unwrap(), "Vivian");
+        assert_eq!(resolve_voice("nova").unwrap(), "Ono_Anna");
+    }
+
+    #[test]
+    fn preserves_qwen_speaker_names() {
+        assert_eq!(resolve_voice("Ryan").unwrap(), "Ryan");
+    }
+
+    #[test]
+    fn rejects_unknown_voices() {
+        let error = resolve_voice("unknown-voice").unwrap_err();
+        assert!(error.contains("Unknown voice"));
     }
 }
