@@ -18,7 +18,6 @@ The release binaries are self-contained — ffmpeg is statically linked for audi
 
 ### Important current limitations
 
-- VoiceDesign is **not** exposed by the resident Rust runtime yet because the current `qwen3_tts_rs` inference stack does not provide a production-ready VoiceDesign path.
 - Audio responses are currently **batch** responses. The server does not claim first-audio streaming until the underlying inference engine exposes a real incremental audio API.
 
 ## Quick Start
@@ -61,6 +60,7 @@ curl -X POST http://localhost:8000/v1/audio/transcriptions \
 |----------|---------|-------------|
 | `TTS_CUSTOMVOICE_MODEL_PATH` | -- | Path to CustomVoice model directory (enables `voice`/`instructions` parameters) |
 | `TTS_INSTRUCTION_MODEL_PATH` | -- | Path to the 1.7B CustomVoice model used for instruction-heavy preset speaker synthesis |
+| `TTS_VOICEDESIGN_MODEL_PATH` | -- | Path to the 1.7B VoiceDesign model used when `instructions` are provided without a `voice` |
 | `TTS_BASE_MODEL_PATH` | -- | Path to Base model directory (enables `audio_sample` voice cloning) |
 | `ASR_MODEL_PATH` | -- | Path to ASR model directory (enables `/v1/audio/transcriptions`) |
 | `HOST` | `127.0.0.1` | TCP bind address |
@@ -69,12 +69,13 @@ curl -X POST http://localhost:8000/v1/audio/transcriptions \
 | `QUEUE_CAPACITY` | `8` | Maximum queued TTS synthesis requests before the runtime starts rejecting with 503 |
 | `RUST_LOG` | `info` | Log level (`trace`, `debug`, `info`, `warn`, `error`) |
 
-At least one of `TTS_CUSTOMVOICE_MODEL_PATH`, `TTS_INSTRUCTION_MODEL_PATH`, `TTS_BASE_MODEL_PATH`, or `ASR_MODEL_PATH` must be set.
+At least one of `TTS_CUSTOMVOICE_MODEL_PATH`, `TTS_INSTRUCTION_MODEL_PATH`, `TTS_VOICEDESIGN_MODEL_PATH`, `TTS_BASE_MODEL_PATH`, or `ASR_MODEL_PATH` must be set.
 
 **Example — all models loaded:**
 
 ```bash
 TTS_CUSTOMVOICE_MODEL_PATH=./models/Qwen3-TTS-12Hz-0.6B-CustomVoice \
+  TTS_VOICEDESIGN_MODEL_PATH=./models/Qwen3-TTS-12Hz-1.7B-VoiceDesign \
   TTS_BASE_MODEL_PATH=./models/Qwen3-TTS-12Hz-0.6B-Base \
   ASR_MODEL_PATH=./models/Qwen3-ASR-0.6B \
   ./qwen3-audio-api
@@ -92,17 +93,17 @@ Generate speech from text. Compatible with the [OpenAI audio speech API](https:/
 |-------|------|----------|---------|-------------|----------------|
 | `model` | string | yes | -- | Model identifier (accepted for compatibility; the loaded model is always used) | -- |
 | `input` | string | yes | -- | Text to synthesize (max 4096 characters) | -- |
-| `voice` | string | no | `alloy` | Voice name (see table below) | CustomVoice |
+| `voice` | string | no | -- | Voice name (see table below) | CustomVoice |
 | `response_format` | string | no | `mp3` | `mp3`, `opus`, `aac`, `flac`, `wav`, or `pcm` | -- |
 | `speed` | number | no | `1.0` | Playback speed, `0.25` to `4.0` | -- |
 | `language` | string | no | `Auto` | Language of the input text (`Auto`, `English`, `Chinese`, `Japanese`, `Korean`, `French`, `German`, `Spanish`, `Italian`, `Portuguese`, `Russian`) | -- |
-| `instructions` | string | no | -- | Style/emotion instruction passed to the model | CustomVoice |
+| `instructions` | string | no | -- | Style/emotion instruction passed to the model. When supplied without `voice`, the request routes to VoiceDesign. | CustomVoice / VoiceDesign |
 | `audio_sample` | string/file | no | -- | Reference audio for voice cloning (file upload via multipart, or base64 string via JSON) | Base |
 | `audio_sample_text` | string | no | -- | Transcript of the reference audio; enables in-context learning mode for higher quality cloning | Base |
 
 > **Note:** The endpoint accepts both JSON and multipart/form-data. Use multipart (`curl -F`) to upload `audio_sample` as a binary file — this avoids base64 encoding. JSON requests can pass `audio_sample` as a base64-encoded string.
 >
-> When `audio_sample` is provided the request uses the **Base** model for voice cloning and `voice`/`instructions` are ignored. When `audio_sample` is omitted the request uses the **CustomVoice** model and requires a valid `voice`. If `instructions` are supplied, the runtime prefers `TTS_INSTRUCTION_MODEL_PATH` and falls back to `TTS_CUSTOMVOICE_MODEL_PATH` if the instruction model is not configured. Style-only requests without `voice` are rejected explicitly instead of silently falling back to a preset speaker.
+> When `audio_sample` is provided the request uses the **Base** model for voice cloning and `voice`/`instructions` are ignored. When `audio_sample` is omitted and `voice` is provided, the request uses the **CustomVoice** model. If `instructions` are supplied with a preset `voice`, the runtime prefers `TTS_INSTRUCTION_MODEL_PATH` and falls back to `TTS_CUSTOMVOICE_MODEL_PATH` if the instruction model is not configured. When `instructions` are supplied **without** `voice`, the request uses the **VoiceDesign** model and requires `TTS_VOICEDESIGN_MODEL_PATH`.
 
 **Response:** The raw audio bytes with the appropriate `Content-Type` header.
 

@@ -29,6 +29,7 @@ pub enum RuntimeStatus {
 pub enum TtsRoute {
     CustomVoice,
     CustomVoiceInstruction,
+    VoiceDesign,
     BaseXVectorClone,
     BaseIclClone,
 }
@@ -38,6 +39,7 @@ pub enum TtsRoute {
 pub struct LoadedModelInventory {
     pub custom_voice_model_id: Option<String>,
     pub instruction_custom_voice_model_id: Option<String>,
+    pub voice_design_model_id: Option<String>,
     pub base_model_id: Option<String>,
     pub asr_model_id: Option<String>,
     pub voice_design_supported: bool,
@@ -103,6 +105,7 @@ impl RuntimeMetrics {
 struct TtsModels {
     custom_voice: Option<TTSInference>,
     instruction_custom_voice: Option<TTSInference>,
+    voice_design: Option<TTSInference>,
     base_model: Option<TTSInference>,
     speaker_encoder: Option<SpeakerEncoder>,
     audio_encoder: Option<AudioEncoder>,
@@ -207,6 +210,7 @@ pub fn build_tts_runtime(
 ) -> Result<Option<(TtsRuntimeHandle, RuntimeMetadata)>, ApiError> {
     let has_any_tts_model = config.tts_customvoice_model_path.is_some()
         || config.tts_instruction_model_path.is_some()
+        || config.tts_voice_design_model_path.is_some()
         || config.tts_base_model_path.is_some();
 
     if !has_any_tts_model {
@@ -226,12 +230,16 @@ pub fn build_tts_runtime(
             .tts_instruction_model_path
             .as_ref()
             .map(|_| "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice".to_string()),
+        voice_design_model_id: config
+            .tts_voice_design_model_path
+            .as_ref()
+            .map(|_| "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign".to_string()),
         base_model_id: config
             .tts_base_model_path
             .as_ref()
             .map(|_| "Qwen/Qwen3-TTS-12Hz-0.6B-Base".to_string()),
         asr_model_id: None,
-        voice_design_supported: false,
+        voice_design_supported: config.tts_voice_design_model_path.is_some(),
     };
 
     let queue_capacity = config.queue_capacity;
@@ -284,6 +292,7 @@ fn load_models(
     let mut models = TtsModels {
         custom_voice: None,
         instruction_custom_voice: None,
+        voice_design: None,
         base_model: None,
         speaker_encoder: None,
         audio_encoder: None,
@@ -307,6 +316,14 @@ fn load_models(
             })?,
         );
         tracing::info!("Instruction CustomVoice TTS model loaded successfully");
+    }
+
+    if let Some(ref path) = config.tts_voice_design_model_path {
+        tracing::info!("Loading VoiceDesign TTS model from {path}");
+        models.voice_design = Some(TTSInference::new(Path::new(path), tts_device).map_err(
+            |error| ApiError::internal(format!("Failed to load voice design model: {error}")),
+        )?);
+        tracing::info!("VoiceDesign TTS model loaded successfully");
     }
 
     if let Some(ref path) = config.tts_base_model_path {
@@ -482,13 +499,40 @@ fn handle_tts_request(models: &TtsModels, request: TtsRequest) -> Result<Generat
         });
     }
 
-    let voice = request.voice.as_deref().ok_or_else(|| {
-        ApiError::bad_request(
-            "voice is required when audio_sample is not provided. VoiceDesign is not available in the resident Rust runtime yet.",
-        )
-    })?;
-    let speaker = crate::config::resolve_voice(voice).map_err(ApiError::bad_request)?;
     let instructions = request.instructions.unwrap_or_default();
+    let voice = request.voice.as_deref();
+
+    if voice.is_none() {
+        if instructions.trim().is_empty() {
+            return Err(ApiError::bad_request(
+                "voice is required when audio_sample is not provided unless VoiceDesign instructions are supplied.",
+            ));
+        }
+
+        let model = models.voice_design.as_ref().ok_or_else(|| {
+            ApiError::bad_request(
+                "instructions without voice require the VoiceDesign model. Set TTS_VOICEDESIGN_MODEL_PATH to enable this route.",
+            )
+        })?;
+        let (waveform, sample_rate) = model
+            .generate_voice_design(
+                &request.input,
+                &request.language,
+                &instructions,
+                0.9,
+                50,
+                2048,
+            )
+            .map_err(|error| ApiError::internal(error.to_string()))?;
+
+        return Ok(GeneratedAudio {
+            waveform,
+            sample_rate,
+            route: TtsRoute::VoiceDesign,
+        });
+    }
+
+    let speaker = crate::config::resolve_voice(voice.unwrap()).map_err(ApiError::bad_request)?;
 
     let model = if !instructions.trim().is_empty() {
         models

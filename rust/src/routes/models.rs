@@ -38,6 +38,14 @@ pub async fn list_models(State(state): State<AppState>) -> impl axum::response::
         });
     }
 
+    if let Some(id) = inventory.voice_design_model_id {
+        data.push(ModelInfo {
+            id,
+            object: "model",
+            owned_by: "qwen",
+        });
+    }
+
     if let Some(id) = inventory.base_model_id {
         data.push(ModelInfo {
             id,

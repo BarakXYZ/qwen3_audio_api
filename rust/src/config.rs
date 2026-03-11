@@ -7,6 +7,8 @@ pub struct ServerConfig {
     pub tts_customvoice_model_path: Option<String>,
     /// Path to the 1.7B instruction CustomVoice model (TTS_INSTRUCTION_MODEL_PATH)
     pub tts_instruction_model_path: Option<String>,
+    /// Path to the 1.7B VoiceDesign model (TTS_VOICEDESIGN_MODEL_PATH)
+    pub tts_voice_design_model_path: Option<String>,
     /// Path to Base model directory for voice cloning (TTS_BASE_MODEL_PATH)
     pub tts_base_model_path: Option<String>,
     /// Path to ASR model directory (ASR_MODEL_PATH)
@@ -31,6 +33,9 @@ impl ServerConfig {
             tts_instruction_model_path: std::env::var("TTS_INSTRUCTION_MODEL_PATH")
                 .ok()
                 .filter(|s| !s.is_empty()),
+            tts_voice_design_model_path: std::env::var("TTS_VOICEDESIGN_MODEL_PATH")
+                .ok()
+                .filter(|s| !s.is_empty()),
             tts_base_model_path: std::env::var("TTS_BASE_MODEL_PATH")
                 .ok()
                 .filter(|s| !s.is_empty()),
@@ -51,12 +56,13 @@ impl ServerConfig {
 
         if config.tts_customvoice_model_path.is_none()
             && config.tts_instruction_model_path.is_none()
+            && config.tts_voice_design_model_path.is_none()
             && config.tts_base_model_path.is_none()
             && config.asr_model_path.is_none()
         {
             return Err(
-                "At least one of TTS_CUSTOMVOICE_MODEL_PATH, TTS_INSTRUCTION_MODEL_PATH, TTS_BASE_MODEL_PATH, \
-                 or ASR_MODEL_PATH must be set."
+                "At least one of TTS_CUSTOMVOICE_MODEL_PATH, TTS_INSTRUCTION_MODEL_PATH, TTS_VOICEDESIGN_MODEL_PATH, \
+                 TTS_BASE_MODEL_PATH, or ASR_MODEL_PATH must be set."
                     .to_string(),
             );
         }

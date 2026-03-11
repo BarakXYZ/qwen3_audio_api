@@ -84,6 +84,7 @@ impl AppState {
             .unwrap_or(LoadedModelInventory {
                 custom_voice_model_id: None,
                 instruction_custom_voice_model_id: None,
+                voice_design_model_id: None,
                 base_model_id: None,
                 asr_model_id: None,
                 voice_design_supported: false,

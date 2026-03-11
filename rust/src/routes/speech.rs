@@ -342,13 +342,11 @@ fn validate_semantics(
         .map(|value| !value.trim().is_empty())
         .unwrap_or(false);
 
-    if has_instructions && !has_voice {
-        return Err(ApiError::bad_request(
-            "instructions without voice imply VoiceDesign, which is not implemented in the resident Rust runtime yet.",
-        ));
-    }
-
     if !has_voice {
+        if has_instructions {
+            return Ok(());
+        }
+
         return Err(ApiError::bad_request(
             "voice is required when audio_sample is not provided.",
         ));
@@ -378,6 +376,7 @@ fn tts_route_header_value(route: TtsRoute) -> &'static str {
     match route {
         TtsRoute::CustomVoice => "custom_voice",
         TtsRoute::CustomVoiceInstruction => "custom_voice_instruction",
+        TtsRoute::VoiceDesign => "voice_design",
         TtsRoute::BaseXVectorClone => "base_xvector_clone",
         TtsRoute::BaseIclClone => "base_icl_clone",
     }
@@ -389,9 +388,8 @@ mod tests {
     use crate::runtime::TtsRoute;
 
     #[test]
-    fn rejects_style_only_requests_until_voice_design_is_supported() {
-        let error = validate_semantics(None, Some("warm and cinematic"), false).unwrap_err();
-        assert!(error.message.contains("VoiceDesign"));
+    fn allows_style_only_requests_for_voice_design() {
+        validate_semantics(None, Some("warm and cinematic"), false).unwrap();
     }
 
     #[test]
@@ -408,6 +406,10 @@ mod tests {
         assert_eq!(
             tts_route_header_value(TtsRoute::BaseIclClone),
             "base_icl_clone"
+        );
+        assert_eq!(
+            tts_route_header_value(TtsRoute::VoiceDesign),
+            "voice_design"
         );
     }
 }
