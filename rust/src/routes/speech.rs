@@ -290,6 +290,19 @@ async fn generate_speech(state: AppState, params: SpeechParams) -> Result<Respon
         HeaderValue::from_str(&synthesis.processing_time.as_millis().to_string())
             .unwrap_or_else(|_| HeaderValue::from_static("0")),
     );
+    response.headers_mut().insert(
+        "x-audio-sample-rate",
+        HeaderValue::from_str(&synthesis.sample_rate.to_string())
+            .unwrap_or_else(|_| HeaderValue::from_static("24000")),
+    );
+    response
+        .headers_mut()
+        .insert("x-audio-channels", HeaderValue::from_static("1"));
+    response.headers_mut().insert(
+        "x-audio-format",
+        HeaderValue::from_str(params.response_format.content_type())
+            .unwrap_or_else(|_| HeaderValue::from_static("application/octet-stream")),
+    );
 
     Ok(response)
 }
