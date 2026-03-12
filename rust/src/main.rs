@@ -9,6 +9,7 @@ use axum::routing::{get, post};
 use axum::Router;
 use std::net::SocketAddr;
 use std::path::Path;
+use std::sync::{Arc, Mutex};
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::{fmt, EnvFilter};
 
@@ -16,9 +17,7 @@ use config::ServerConfig;
 use runtime::{build_tts_runtime, RuntimeMetadata, RuntimeStatus};
 use state::AppState;
 
-use qwen3_asr::inference::AsrInference;
 use qwen3_tts::tensor::Device as TtsDevice;
-use std::sync::{Arc, Mutex};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -78,49 +77,14 @@ async fn main() -> anyhow::Result<()> {
             ),
         };
 
-    // Load ASR separately so speech traffic does not share its queue.
-    let mut asr = None;
-    if let Some(ref path) = config.asr_model_path {
-        tracing::info!("Loading ASR model from {}", path);
-        let model_dir = Path::new(path);
-
-        #[cfg(feature = "tch-backend")]
-        let asr_device = {
-            if tch::Cuda::is_available() {
-                tracing::info!("ASR using CUDA GPU");
-                qwen3_asr::tensor::Device::Gpu(0)
-            } else {
-                tracing::info!("ASR using CPU");
-                qwen3_asr::tensor::Device::Cpu
-            }
-        };
-
-        #[cfg(feature = "mlx")]
-        let asr_device = {
-            // init_mlx is idempotent if already called for TTS
-            qwen3_asr::backend::mlx::stream::init_mlx(true);
-            tracing::info!("ASR using MLX Metal GPU");
-            qwen3_asr::tensor::Device::Gpu(0)
-        };
-
-        let loaded_asr = AsrInference::load(model_dir, asr_device)?;
-        tracing::info!("ASR model loaded successfully");
-        asr = Some(Arc::new(Mutex::new(loaded_asr)));
-    }
-
     let state = AppState {
         tts,
-        asr,
         runtime: runtime_metadata,
     };
 
     // Build router
     let app = Router::new()
         .route("/v1/audio/speech", post(routes::speech::speech_handler))
-        .route(
-            "/v1/audio/transcriptions",
-            post(routes::transcription::transcribe),
-        )
         .route("/v1/models", get(routes::models::list_models))
         .route("/health", get(routes::health::health))
         .route("/health/details", get(routes::health::health_details))

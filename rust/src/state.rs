@@ -1,7 +1,5 @@
-use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use qwen3_asr::inference::AsrInference;
 use serde::Serialize;
 
 use crate::runtime::{
@@ -12,7 +10,6 @@ use crate::runtime::{
 #[derive(Clone)]
 pub struct AppState {
     pub tts: Option<TtsRuntimeHandle>,
-    pub asr: Option<Arc<Mutex<AsrInference>>>,
     pub runtime: RuntimeMetadata,
 }
 
@@ -75,10 +72,9 @@ impl AppState {
         }
     }
 
-    /// Return the loaded model inventory, combining TTS and ASR availability.
+    /// Return the loaded model inventory.
     pub fn loaded_models(&self) -> LoadedModelInventory {
-        let mut inventory = self
-            .tts
+        self.tts
             .as_ref()
             .map(|tts| tts.model_inventory().clone())
             .unwrap_or(LoadedModelInventory {
@@ -88,13 +84,7 @@ impl AppState {
                 base_model_id: None,
                 asr_model_id: None,
                 voice_design_supported: false,
-            });
-
-        if self.asr.is_some() {
-            inventory.asr_model_id = Some("Qwen/Qwen3-ASR-0.6B".to_string());
-        }
-
-        inventory
+            })
     }
 
     /// Return a consistent metrics snapshot even when TTS is not loaded.

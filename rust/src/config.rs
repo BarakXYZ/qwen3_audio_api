@@ -11,8 +11,6 @@ pub struct ServerConfig {
     pub tts_voice_design_model_path: Option<String>,
     /// Path to Base model directory for voice cloning (TTS_BASE_MODEL_PATH)
     pub tts_base_model_path: Option<String>,
-    /// Path to ASR model directory (ASR_MODEL_PATH)
-    pub asr_model_path: Option<String>,
     /// Bind address (HOST, default: 127.0.0.1)
     pub host: String,
     /// Port (PORT, default: 8000)
@@ -39,9 +37,6 @@ impl ServerConfig {
             tts_base_model_path: std::env::var("TTS_BASE_MODEL_PATH")
                 .ok()
                 .filter(|s| !s.is_empty()),
-            asr_model_path: std::env::var("ASR_MODEL_PATH")
-                .ok()
-                .filter(|s| !s.is_empty()),
             host: std::env::var("HOST").unwrap_or_else(|_| "127.0.0.1".to_string()),
             port: std::env::var("PORT")
                 .ok()
@@ -58,11 +53,10 @@ impl ServerConfig {
             && config.tts_instruction_model_path.is_none()
             && config.tts_voice_design_model_path.is_none()
             && config.tts_base_model_path.is_none()
-            && config.asr_model_path.is_none()
         {
             return Err(
                 "At least one of TTS_CUSTOMVOICE_MODEL_PATH, TTS_INSTRUCTION_MODEL_PATH, TTS_VOICEDESIGN_MODEL_PATH, \
-                 TTS_BASE_MODEL_PATH, or ASR_MODEL_PATH must be set."
+                 or TTS_BASE_MODEL_PATH must be set."
                     .to_string(),
             );
         }

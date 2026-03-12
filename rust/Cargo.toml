@@ -44,13 +44,12 @@ ffmpeg-next = "8"
 
 # Qwen3 inference crates
 qwen3_tts = { path = "../vendor/qwen3_tts_rs", default-features = false }
-qwen3_asr = { path = "../vendor/qwen3_asr_rs", default-features = false }
 
 # PyTorch bindings (optional, only for tch-backend CUDA detection)
 tch = { version = "0.20", optional = true }
 
 [features]
 default = ["tch-backend", "build-ffmpeg"]
-tch-backend = ["qwen3_tts/tch-backend", "qwen3_asr/tch-backend", "tch"]
-mlx = ["qwen3_tts/mlx", "qwen3_asr/mlx"]
-build-ffmpeg = ["qwen3_asr/build-ffmpeg", "ffmpeg-next/build-lib-mp3lame", "ffmpeg-next/build-lib-opus"]
+tch-backend = ["qwen3_tts/tch-backend", "tch"]
+mlx = ["qwen3_tts/mlx"]
+build-ffmpeg = ["ffmpeg-next/build-lib-mp3lame", "ffmpeg-next/build-lib-opus"]

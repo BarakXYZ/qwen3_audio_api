@@ -58,12 +58,6 @@ impl From<qwen3_tts::error::Qwen3TTSError> for ApiError {
     }
 }
 
-impl From<qwen3_asr::error::AsrError> for ApiError {
-    fn from(e: qwen3_asr::error::AsrError) -> Self {
-        ApiError::internal(e.to_string())
-    }
-}
-
 impl std::fmt::Display for ApiError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}: {}", self.status, self.message)
