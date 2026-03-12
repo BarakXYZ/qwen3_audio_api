@@ -1460,8 +1460,7 @@ dependencies = [
 
 [[package]]
 name = "qwen3_asr"
-version = "0.1.0"
-source = "git+https://github.com/second-state/qwen3_asr_rs.git#56d59eb0e0d73924969231c36fa541dd290b0947"
+version = "0.1.9"
 dependencies = [
  "anyhow",
  "cmake",
@@ -1481,8 +1480,7 @@ dependencies = [
 
 [[package]]
 name = "qwen3_tts"
-version = "0.1.1"
-source = "git+https://github.com/second-state/qwen3_tts_rs.git#5edcdd40f59836343f96cd5f8b1920c4728a3fab"
+version = "0.1.5"
 dependencies = [
  "anyhow",
  "base64 0.22.1",

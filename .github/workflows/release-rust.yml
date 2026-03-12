@@ -18,6 +18,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -37,10 +39,6 @@ jobs:
         run: |
           echo "LIBTORCH=$(pwd)/libtorch" >> $GITHUB_ENV
           echo "LD_LIBRARY_PATH=$(pwd)/libtorch/lib:$LD_LIBRARY_PATH" >> $GITHUB_ENV
-
-      - name: Force latest qwen3_tts and qwen3_asr from HEAD
-        working-directory: rust
-        run: rm Cargo.lock
 
       - name: Build
         working-directory: rust
@@ -81,6 +79,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -108,10 +108,6 @@ jobs:
           echo "LIBTORCH=$(pwd)/libtorch" >> $GITHUB_ENV
           echo "LD_LIBRARY_PATH=$(pwd)/libtorch/lib:/usr/local/cuda/lib64:$LD_LIBRARY_PATH" >> $GITHUB_ENV
           echo "RUSTFLAGS=-C link-arg=-Wl,-rpath-link,$(pwd)/libtorch/lib -C link-arg=-Wl,-rpath-link,/usr/local/cuda/lib64" >> $GITHUB_ENV
-
-      - name: Force latest qwen3_tts and qwen3_asr from HEAD
-        working-directory: rust
-        run: rm Cargo.lock
 
       - name: Build
         working-directory: rust
@@ -152,6 +148,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -171,10 +169,6 @@ jobs:
         run: |
           echo "LIBTORCH=$(pwd)/libtorch" >> $GITHUB_ENV
           echo "LD_LIBRARY_PATH=$(pwd)/libtorch/lib:$LD_LIBRARY_PATH" >> $GITHUB_ENV
-
-      - name: Force latest qwen3_tts and qwen3_asr from HEAD
-        working-directory: rust
-        run: rm Cargo.lock
 
       - name: Build
         working-directory: rust
@@ -215,6 +209,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -242,10 +238,6 @@ jobs:
           echo "LIBTORCH=$(pwd)/libtorch" >> $GITHUB_ENV
           echo "LD_LIBRARY_PATH=$(pwd)/libtorch/lib:/usr/local/cuda/lib64:$LD_LIBRARY_PATH" >> $GITHUB_ENV
           echo "RUSTFLAGS=-C link-arg=-Wl,-rpath-link,$(pwd)/libtorch/lib -C link-arg=-Wl,-rpath-link,/usr/local/cuda/lib64" >> $GITHUB_ENV
-
-      - name: Force latest qwen3_tts and qwen3_asr from HEAD
-        working-directory: rust
-        run: rm Cargo.lock
 
       - name: Build
         working-directory: rust
@@ -283,16 +275,14 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
       - name: Install system dependencies
         run: brew install cmake pkg-config nasm lame opus
-
-      - name: Force latest qwen3_tts and qwen3_asr from HEAD
-        working-directory: rust
-        run: rm Cargo.lock
 
       - name: Build with MLX backend
         working-directory: rust

@@ -11,6 +11,7 @@ wheels/
 
 # Generated audio
 *.wav
+rust/target/
 
 # Models
 models/

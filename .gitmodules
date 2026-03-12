@@ -1,0 +1,7 @@
+[submodule "vendor/qwen3_tts_rs"]
+	path = vendor/qwen3_tts_rs
+	url = https://github.com/BarakXYZ/qwen3_tts_rs.git
+	branch = main
+[submodule "vendor/qwen3_asr_rs"]
+	path = vendor/qwen3_asr_rs
+	url = https://github.com/second-state/qwen3_asr_rs.git

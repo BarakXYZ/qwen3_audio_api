@@ -69,3 +69,5 @@ impl std::fmt::Display for ApiError {
         write!(f, "{}: {}", self.status, self.message)
     }
 }
+
+impl std::error::Error for ApiError {}

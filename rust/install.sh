@@ -1,10 +1,10 @@
 #!/bin/bash
 # Installer for qwen3-audio-api — downloads binary (with bundled libtorch), models, and tokenizers
-# Usage: curl -sSf https://raw.githubusercontent.com/second-state/qwen3_audio_api/main/rust/install.sh | bash
+# Usage: curl -sSf https://raw.githubusercontent.com/BarakXYZ/qwen3_audio_api/main/rust/install.sh | bash
 
 set -e
 
-REPO="second-state/qwen3_audio_api"
+REPO="BarakXYZ/qwen3_audio_api"
 INSTALL_DIR="./qwen3_audio_api"
 
 # ---------------------------------------------------------------------------

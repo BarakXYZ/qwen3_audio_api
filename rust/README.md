@@ -25,7 +25,7 @@ The release binaries are self-contained — ffmpeg is statically linked for audi
 Run the installer to download the binary, models, and tokenizers for your platform:
 
 ```bash
-curl -sSf https://raw.githubusercontent.com/second-state/qwen3_audio_api/main/rust/install.sh | bash
+curl -sSf https://raw.githubusercontent.com/BarakXYZ/qwen3_audio_api/main/rust/install.sh | bash
 ```
 
 The installer detects your OS, CPU, and NVIDIA GPU (if present), then sets up everything in `./qwen3_audio_api/`. Once complete, start the server:
@@ -53,6 +53,12 @@ Speech-to-Text:
 curl -X POST http://localhost:8000/v1/audio/transcriptions \
   -F file=@audio.wav -F model=qwen3-asr
 ```
+
+## Release provenance
+
+- Release builds use vendored `vendor/qwen3_tts_rs` and `vendor/qwen3_asr_rs` submodules instead of floating git dependencies.
+- CI checks out submodules recursively so MLX builds include the nested `mlx-c` sources required by both inference crates.
+- `Cargo.lock` is preserved during release builds to keep artifacts reproducible.
 
 ## Configuration
 

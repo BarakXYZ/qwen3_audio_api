@@ -42,9 +42,9 @@ tempfile = "3"
 # Audio transcoding (statically linked via build-ffmpeg feature)
 ffmpeg-next = "8"
 
-# Qwen3 inference crates (git dependencies)
-qwen3_tts = { git = "https://github.com/BarakXYZ/qwen3_tts_rs.git", rev = "b9fe59a", default-features = false }
-qwen3_asr = { git = "https://github.com/second-state/qwen3_asr_rs.git", default-features = false }
+# Qwen3 inference crates
+qwen3_tts = { path = "../vendor/qwen3_tts_rs", default-features = false }
+qwen3_asr = { path = "../vendor/qwen3_asr_rs", default-features = false }
 
 # PyTorch bindings (optional, only for tch-backend CUDA detection)
 tch = { version = "0.20", optional = true }
