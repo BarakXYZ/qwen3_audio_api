@@ -35,7 +35,7 @@ pub enum TtsRoute {
 }
 
 /// Public model inventory summary for health/details and `/v1/models`.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct LoadedModelInventory {
     pub custom_voice_model_id: Option<String>,
     pub instruction_custom_voice_model_id: Option<String>,
@@ -43,6 +43,35 @@ pub struct LoadedModelInventory {
     pub base_model_id: Option<String>,
     pub asr_model_id: Option<String>,
     pub voice_design_supported: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ManagedModelId {
+    CustomVoice,
+    InstructionCustomVoice,
+    VoiceDesign,
+    BaseVoiceClone,
+}
+
+impl ManagedModelId {
+    pub fn from_route_id(value: &str) -> Option<Self> {
+        match value {
+            "custom_voice" => Some(Self::CustomVoice),
+            "instruction_custom_voice" => Some(Self::InstructionCustomVoice),
+            "voice_design" => Some(Self::VoiceDesign),
+            "base_voice_clone" => Some(Self::BaseVoiceClone),
+            _ => None,
+        }
+    }
+
+    fn inventory_id(self) -> &'static str {
+        match self {
+            Self::CustomVoice => "Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice",
+            Self::InstructionCustomVoice => "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice",
+            Self::VoiceDesign => "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign",
+            Self::BaseVoiceClone => "Qwen/Qwen3-TTS-12Hz-0.6B-Base",
+        }
+    }
 }
 
 /// Current queue and request counters exposed for observability.
@@ -111,6 +140,14 @@ struct TtsModels {
     audio_encoder: Option<AudioEncoder>,
 }
 
+#[derive(Debug, Clone, Default)]
+struct AvailableModelPaths {
+    custom_voice: Option<String>,
+    instruction_custom_voice: Option<String>,
+    voice_design: Option<String>,
+    base_voice_clone: Option<String>,
+}
+
 /// Normalized synthesis request sent to the worker thread.
 pub struct TtsRequest {
     pub input: String,
@@ -136,18 +173,33 @@ struct TtsJob {
     response_tx: oneshot::Sender<Result<TtsResponse, ApiError>>,
 }
 
+enum RuntimeCommand {
+    Synthesize(TtsJob),
+    LoadModel {
+        model_id: ManagedModelId,
+        response_tx: oneshot::Sender<Result<LoadedModelInventory, ApiError>>,
+    },
+    OffloadModel {
+        model_id: ManagedModelId,
+        response_tx: oneshot::Sender<Result<LoadedModelInventory, ApiError>>,
+    },
+}
+
 /// Handle used by request handlers to submit work to the dedicated TTS worker.
 #[derive(Clone)]
 pub struct TtsRuntimeHandle {
-    sender: mpsc::Sender<TtsJob>,
+    sender: mpsc::Sender<RuntimeCommand>,
     metrics: Arc<RuntimeMetrics>,
-    model_inventory: LoadedModelInventory,
+    model_inventory: Arc<Mutex<LoadedModelInventory>>,
 }
 
 impl TtsRuntimeHandle {
     /// Return the loaded model inventory.
-    pub fn model_inventory(&self) -> &LoadedModelInventory {
-        &self.model_inventory
+    pub fn model_inventory(&self) -> LoadedModelInventory {
+        self.model_inventory
+            .lock()
+            .map(|guard| guard.clone())
+            .unwrap_or_default()
     }
 
     /// Return a snapshot of current queue metrics.
@@ -162,11 +214,11 @@ impl TtsRuntimeHandle {
         self.metrics.total_requests.fetch_add(1, Ordering::Relaxed);
         self.metrics.queue_depth.fetch_add(1, Ordering::Relaxed);
 
-        let send_result = self.sender.try_send(TtsJob {
+        let send_result = self.sender.try_send(RuntimeCommand::Synthesize(TtsJob {
             request,
             enqueued_at: Instant::now(),
             response_tx,
-        });
+        }));
 
         if let Err(error) = send_result {
             self.metrics.queue_depth.fetch_sub(1, Ordering::Relaxed);
@@ -183,6 +235,44 @@ impl TtsRuntimeHandle {
 
             return Err(ApiError::service_unavailable(message));
         }
+
+        response_rx.await.map_err(|_| {
+            self.metrics.worker_failures.fetch_add(1, Ordering::Relaxed);
+            ApiError::service_unavailable("TTS runtime worker terminated unexpectedly.")
+        })?
+    }
+
+    pub async fn load_model(
+        &self,
+        model_id: ManagedModelId,
+    ) -> Result<LoadedModelInventory, ApiError> {
+        let (response_tx, response_rx) = oneshot::channel();
+        self.sender
+            .send(RuntimeCommand::LoadModel {
+                model_id,
+                response_tx,
+            })
+            .await
+            .map_err(|_| ApiError::service_unavailable("TTS runtime worker is unavailable."))?;
+
+        response_rx.await.map_err(|_| {
+            self.metrics.worker_failures.fetch_add(1, Ordering::Relaxed);
+            ApiError::service_unavailable("TTS runtime worker terminated unexpectedly.")
+        })?
+    }
+
+    pub async fn offload_model(
+        &self,
+        model_id: ManagedModelId,
+    ) -> Result<LoadedModelInventory, ApiError> {
+        let (response_tx, response_rx) = oneshot::channel();
+        self.sender
+            .send(RuntimeCommand::OffloadModel {
+                model_id,
+                response_tx,
+            })
+            .await
+            .map_err(|_| ApiError::service_unavailable("TTS runtime worker is unavailable."))?;
 
         response_rx.await.map_err(|_| {
             self.metrics.worker_failures.fetch_add(1, Ordering::Relaxed);
@@ -220,27 +310,17 @@ pub fn build_tts_runtime(
     let status = Arc::new(Mutex::new(RuntimeStatus::Starting));
     let last_error = Arc::new(Mutex::new(None));
 
-    let models = load_models(config, tts_device)?;
-    let model_inventory = LoadedModelInventory {
-        custom_voice_model_id: config
-            .tts_customvoice_model_path
-            .as_ref()
-            .map(|_| "Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice".to_string()),
-        instruction_custom_voice_model_id: config
-            .tts_instruction_model_path
-            .as_ref()
-            .map(|_| "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice".to_string()),
-        voice_design_model_id: config
-            .tts_voice_design_model_path
-            .as_ref()
-            .map(|_| "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign".to_string()),
-        base_model_id: config
-            .tts_base_model_path
-            .as_ref()
-            .map(|_| "Qwen/Qwen3-TTS-12Hz-0.6B-Base".to_string()),
-        asr_model_id: None,
-        voice_design_supported: config.tts_voice_design_model_path.is_some(),
+    let available_model_paths = AvailableModelPaths {
+        custom_voice: config.tts_customvoice_model_path.clone(),
+        instruction_custom_voice: config.tts_instruction_model_path.clone(),
+        voice_design: config.tts_voice_design_model_path.clone(),
+        base_voice_clone: config.tts_base_model_path.clone(),
     };
+    let mut models = load_models(config, tts_device)?;
+    let model_inventory = Arc::new(Mutex::new(build_loaded_model_inventory(
+        &available_model_paths,
+        &models,
+    )));
 
     let queue_capacity = config.queue_capacity;
     let metrics = Arc::new(RuntimeMetrics::new(queue_capacity));
@@ -249,16 +329,20 @@ pub fn build_tts_runtime(
     let worker_metrics = Arc::clone(&metrics);
     let worker_status = Arc::clone(&status);
     let worker_last_error = Arc::clone(&last_error);
+    let worker_inventory = Arc::clone(&model_inventory);
 
     thread::Builder::new()
         .name("qwen3-audio-api-tts".to_string())
         .spawn(move || {
             run_tts_worker(
-                models,
+                &mut models,
+                available_model_paths,
+                tts_device,
                 receiver,
                 worker_metrics,
                 worker_status,
                 worker_last_error,
+                worker_inventory,
             );
         })
         .map_err(|error| ApiError::internal(format!("Failed to spawn TTS worker: {error}")))?;
@@ -298,111 +382,335 @@ fn load_models(
         audio_encoder: None,
     };
 
-    if let Some(ref path) = config.tts_customvoice_model_path {
-        tracing::info!("Loading CustomVoice TTS model from {path}");
-        models.custom_voice = Some(TTSInference::new(Path::new(path), tts_device).map_err(
-            |error| ApiError::internal(format!("Failed to load custom voice model: {error}")),
-        )?);
-        tracing::info!("CustomVoice TTS model loaded successfully");
+    if config.tts_preload_model_ids.contains("custom_voice") {
+        if let Some(ref path) = config.tts_customvoice_model_path {
+            tracing::info!("Loading CustomVoice TTS model from {path}");
+            models.custom_voice = Some(TTSInference::new(Path::new(path), tts_device).map_err(
+                |error| ApiError::internal(format!("Failed to load custom voice model: {error}")),
+            )?);
+            tracing::info!("CustomVoice TTS model loaded successfully");
+        }
     }
 
-    if let Some(ref path) = config.tts_instruction_model_path {
-        tracing::info!("Loading instruction CustomVoice TTS model from {path}");
-        models.instruction_custom_voice = Some(
-            TTSInference::new(Path::new(path), tts_device).map_err(|error| {
-                ApiError::internal(format!(
-                    "Failed to load instruction custom voice model: {error}"
-                ))
-            })?,
-        );
-        tracing::info!("Instruction CustomVoice TTS model loaded successfully");
-    }
-
-    if let Some(ref path) = config.tts_voice_design_model_path {
-        tracing::info!("Loading VoiceDesign TTS model from {path}");
-        models.voice_design = Some(TTSInference::new(Path::new(path), tts_device).map_err(
-            |error| ApiError::internal(format!("Failed to load voice design model: {error}")),
-        )?);
-        tracing::info!("VoiceDesign TTS model loaded successfully");
-    }
-
-    if let Some(ref path) = config.tts_base_model_path {
-        tracing::info!("Loading Base TTS model from {path}");
-        let inference = TTSInference::new(Path::new(path), tts_device)
-            .map_err(|error| ApiError::internal(format!("Failed to load base model: {error}")))?;
-
-        let se_config = inference.config().speaker_encoder_config.clone();
-        let speaker_encoder = SpeakerEncoder::load(inference.weights(), &se_config, tts_device)
-            .map_err(|error| {
-                ApiError::internal(format!("Failed to load speaker encoder: {error}"))
-            })?;
-        tracing::info!("Speaker encoder loaded");
-
-        let speech_tokenizer_path = Path::new(path)
-            .join("speech_tokenizer")
-            .join("model.safetensors");
-        if speech_tokenizer_path.exists() {
-            models.audio_encoder = Some(
-                AudioEncoder::load(&speech_tokenizer_path, tts_device).map_err(|error| {
-                    ApiError::internal(format!("Failed to load audio encoder: {error}"))
+    if config
+        .tts_preload_model_ids
+        .contains("instruction_custom_voice")
+    {
+        if let Some(ref path) = config.tts_instruction_model_path {
+            tracing::info!("Loading instruction CustomVoice TTS model from {path}");
+            models.instruction_custom_voice = Some(
+                TTSInference::new(Path::new(path), tts_device).map_err(|error| {
+                    ApiError::internal(format!(
+                        "Failed to load instruction custom voice model: {error}"
+                    ))
                 })?,
             );
-            tracing::info!("Audio encoder loaded for ICL mode");
-        } else {
-            tracing::warn!(
-                "speech_tokenizer not found at {}; ICL voice cloning will not be available",
-                speech_tokenizer_path.display()
-            );
+            tracing::info!("Instruction CustomVoice TTS model loaded successfully");
         }
+    }
 
-        models.speaker_encoder = Some(speaker_encoder);
-        models.base_model = Some(inference);
-        tracing::info!("Base TTS model loaded successfully");
+    if config.tts_preload_model_ids.contains("voice_design") {
+        if let Some(ref path) = config.tts_voice_design_model_path {
+            tracing::info!("Loading VoiceDesign TTS model from {path}");
+            models.voice_design = Some(TTSInference::new(Path::new(path), tts_device).map_err(
+                |error| ApiError::internal(format!("Failed to load voice design model: {error}")),
+            )?);
+            tracing::info!("VoiceDesign TTS model loaded successfully");
+        }
+    }
+
+    if config.tts_preload_model_ids.contains("base_voice_clone") {
+        if let Some(ref path) = config.tts_base_model_path {
+            tracing::info!("Loading Base TTS model from {path}");
+            let inference = TTSInference::new(Path::new(path), tts_device).map_err(|error| {
+                ApiError::internal(format!("Failed to load base model: {error}"))
+            })?;
+
+            let se_config = inference.config().speaker_encoder_config.clone();
+            let speaker_encoder = SpeakerEncoder::load(inference.weights(), &se_config, tts_device)
+                .map_err(|error| {
+                    ApiError::internal(format!("Failed to load speaker encoder: {error}"))
+                })?;
+            tracing::info!("Speaker encoder loaded");
+
+            let speech_tokenizer_path = Path::new(path)
+                .join("speech_tokenizer")
+                .join("model.safetensors");
+            if speech_tokenizer_path.exists() {
+                models.audio_encoder = Some(
+                    AudioEncoder::load(&speech_tokenizer_path, tts_device).map_err(|error| {
+                        ApiError::internal(format!("Failed to load audio encoder: {error}"))
+                    })?,
+                );
+                tracing::info!("Audio encoder loaded for ICL mode");
+            } else {
+                tracing::warn!(
+                    "speech_tokenizer not found at {}; ICL voice cloning will not be available",
+                    speech_tokenizer_path.display()
+                );
+            }
+
+            models.speaker_encoder = Some(speaker_encoder);
+            models.base_model = Some(inference);
+            tracing::info!("Base TTS model loaded successfully");
+        }
     }
 
     Ok(models)
 }
 
+fn build_loaded_model_inventory(
+    available_model_paths: &AvailableModelPaths,
+    models: &TtsModels,
+) -> LoadedModelInventory {
+    LoadedModelInventory {
+        custom_voice_model_id: models
+            .custom_voice
+            .as_ref()
+            .map(|_| ManagedModelId::CustomVoice.inventory_id().to_string()),
+        instruction_custom_voice_model_id: models.instruction_custom_voice.as_ref().map(|_| {
+            ManagedModelId::InstructionCustomVoice
+                .inventory_id()
+                .to_string()
+        }),
+        voice_design_model_id: models
+            .voice_design
+            .as_ref()
+            .map(|_| ManagedModelId::VoiceDesign.inventory_id().to_string()),
+        base_model_id: models
+            .base_model
+            .as_ref()
+            .map(|_| ManagedModelId::BaseVoiceClone.inventory_id().to_string()),
+        asr_model_id: None,
+        voice_design_supported: available_model_paths.voice_design.is_some(),
+    }
+}
+
+fn load_model_into_runtime(
+    models: &mut TtsModels,
+    available_model_paths: &AvailableModelPaths,
+    model_id: ManagedModelId,
+    tts_device: TtsDevice,
+) -> Result<(), ApiError> {
+    match model_id {
+        ManagedModelId::CustomVoice => {
+            if models.custom_voice.is_some() {
+                return Ok(());
+            }
+            let path = available_model_paths.custom_voice.as_ref().ok_or_else(|| {
+                ApiError::bad_request(
+                    "CustomVoice is not configured on this runtime. Set TTS_CUSTOMVOICE_MODEL_PATH.",
+                )
+            })?;
+            tracing::info!("Hot-loading CustomVoice TTS model from {path}");
+            models.custom_voice = Some(TTSInference::new(Path::new(path), tts_device).map_err(
+                |error| ApiError::internal(format!("Failed to load custom voice model: {error}")),
+            )?);
+        }
+        ManagedModelId::InstructionCustomVoice => {
+            if models.instruction_custom_voice.is_some() {
+                return Ok(());
+            }
+            let path = available_model_paths
+                .instruction_custom_voice
+                .as_ref()
+                .ok_or_else(|| {
+                    ApiError::bad_request(
+                        "Instruction CustomVoice is not configured on this runtime. Set TTS_INSTRUCTION_MODEL_PATH.",
+                    )
+                })?;
+            tracing::info!("Hot-loading Instruction CustomVoice TTS model from {path}");
+            models.instruction_custom_voice = Some(
+                TTSInference::new(Path::new(path), tts_device).map_err(|error| {
+                    ApiError::internal(format!(
+                        "Failed to load instruction custom voice model: {error}"
+                    ))
+                })?,
+            );
+        }
+        ManagedModelId::VoiceDesign => {
+            if models.voice_design.is_some() {
+                return Ok(());
+            }
+            let path = available_model_paths.voice_design.as_ref().ok_or_else(|| {
+                ApiError::bad_request(
+                    "VoiceDesign is not configured on this runtime. Set TTS_VOICEDESIGN_MODEL_PATH.",
+                )
+            })?;
+            tracing::info!("Hot-loading VoiceDesign TTS model from {path}");
+            models.voice_design = Some(TTSInference::new(Path::new(path), tts_device).map_err(
+                |error| ApiError::internal(format!("Failed to load voice design model: {error}")),
+            )?);
+        }
+        ManagedModelId::BaseVoiceClone => {
+            if models.base_model.is_some() {
+                return Ok(());
+            }
+            let path = available_model_paths
+                .base_voice_clone
+                .as_ref()
+                .ok_or_else(|| {
+                    ApiError::bad_request(
+                    "Base voice clone is not configured on this runtime. Set TTS_BASE_MODEL_PATH.",
+                )
+                })?;
+            tracing::info!("Hot-loading Base TTS model from {path}");
+            let inference = TTSInference::new(Path::new(path), tts_device).map_err(|error| {
+                ApiError::internal(format!("Failed to load base model: {error}"))
+            })?;
+
+            let se_config = inference.config().speaker_encoder_config.clone();
+            let speaker_encoder = SpeakerEncoder::load(inference.weights(), &se_config, tts_device)
+                .map_err(|error| {
+                    ApiError::internal(format!("Failed to load speaker encoder: {error}"))
+                })?;
+
+            let speech_tokenizer_path = Path::new(path)
+                .join("speech_tokenizer")
+                .join("model.safetensors");
+            let audio_encoder = if speech_tokenizer_path.exists() {
+                Some(
+                    AudioEncoder::load(&speech_tokenizer_path, tts_device).map_err(|error| {
+                        ApiError::internal(format!("Failed to load audio encoder: {error}"))
+                    })?,
+                )
+            } else {
+                tracing::warn!(
+                    "speech_tokenizer not found at {}; ICL voice cloning will not be available",
+                    speech_tokenizer_path.display()
+                );
+                None
+            };
+
+            models.speaker_encoder = Some(speaker_encoder);
+            models.audio_encoder = audio_encoder;
+            models.base_model = Some(inference);
+        }
+    }
+
+    Ok(())
+}
+
+fn offload_model_from_runtime(
+    models: &mut TtsModels,
+    _available_model_paths: &AvailableModelPaths,
+    model_id: ManagedModelId,
+) -> Result<(), ApiError> {
+    match model_id {
+        ManagedModelId::CustomVoice => {
+            models.custom_voice = None;
+        }
+        ManagedModelId::InstructionCustomVoice => {
+            models.instruction_custom_voice = None;
+        }
+        ManagedModelId::VoiceDesign => {
+            models.voice_design = None;
+        }
+        ManagedModelId::BaseVoiceClone => {
+            models.base_model = None;
+            models.speaker_encoder = None;
+            models.audio_encoder = None;
+        }
+    }
+
+    Ok(())
+}
+
 /// Execute queued TTS requests on a single dedicated worker thread.
 fn run_tts_worker(
-    models: TtsModels,
-    mut receiver: mpsc::Receiver<TtsJob>,
+    models: &mut TtsModels,
+    available_model_paths: AvailableModelPaths,
+    tts_device: TtsDevice,
+    mut receiver: mpsc::Receiver<RuntimeCommand>,
     metrics: Arc<RuntimeMetrics>,
     status: Arc<Mutex<RuntimeStatus>>,
     last_error: Arc<Mutex<Option<String>>>,
+    model_inventory: Arc<Mutex<LoadedModelInventory>>,
 ) {
-    while let Some(job) = receiver.blocking_recv() {
-        metrics.queue_depth.fetch_sub(1, Ordering::Relaxed);
-        metrics.active_requests.fetch_add(1, Ordering::Relaxed);
+    while let Some(command) = receiver.blocking_recv() {
+        match command {
+            RuntimeCommand::Synthesize(job) => {
+                metrics.queue_depth.fetch_sub(1, Ordering::Relaxed);
+                metrics.active_requests.fetch_add(1, Ordering::Relaxed);
 
-        let queue_wait = job.enqueued_at.elapsed();
-        let started_at = Instant::now();
-        let result = handle_tts_request(&models, job.request).map(|response| TtsResponse {
-            waveform: response.waveform,
-            sample_rate: response.sample_rate,
-            route: response.route,
-            queue_wait,
-            processing_time: started_at.elapsed(),
-        });
+                let queue_wait = job.enqueued_at.elapsed();
+                let started_at = Instant::now();
+                let result = handle_tts_request(models, job.request).map(|response| TtsResponse {
+                    waveform: response.waveform,
+                    sample_rate: response.sample_rate,
+                    route: response.route,
+                    queue_wait,
+                    processing_time: started_at.elapsed(),
+                });
 
-        match &result {
-            Ok(_) => {
-                metrics.completed_requests.fetch_add(1, Ordering::Relaxed);
-            }
-            Err(error) => {
-                metrics.failed_requests.fetch_add(1, Ordering::Relaxed);
-                if error.status.is_server_error() {
-                    if let Ok(mut last_error_guard) = last_error.lock() {
-                        *last_error_guard = Some(error.message.clone());
+                match &result {
+                    Ok(_) => {
+                        metrics.completed_requests.fetch_add(1, Ordering::Relaxed);
+                    }
+                    Err(error) => {
+                        metrics.failed_requests.fetch_add(1, Ordering::Relaxed);
+                        if error.status.is_server_error() {
+                            if let Ok(mut last_error_guard) = last_error.lock() {
+                                *last_error_guard = Some(error.message.clone());
+                            }
+                        }
                     }
                 }
+
+                metrics.active_requests.fetch_sub(1, Ordering::Relaxed);
+
+                if job.response_tx.send(result).is_err() {
+                    tracing::warn!("Dropped TTS response because the requester disconnected");
+                }
             }
-        }
-
-        metrics.active_requests.fetch_sub(1, Ordering::Relaxed);
-
-        if job.response_tx.send(result).is_err() {
-            tracing::warn!("Dropped TTS response because the requester disconnected");
+            RuntimeCommand::LoadModel {
+                model_id,
+                response_tx,
+            } => {
+                if let Ok(mut status_guard) = status.lock() {
+                    *status_guard = RuntimeStatus::Starting;
+                }
+                let result =
+                    load_model_into_runtime(models, &available_model_paths, model_id, tts_device)
+                        .map(|_| build_loaded_model_inventory(&available_model_paths, models));
+                if let Ok(mut inventory_guard) = model_inventory.lock() {
+                    *inventory_guard = build_loaded_model_inventory(&available_model_paths, models);
+                }
+                if let Ok(mut status_guard) = status.lock() {
+                    *status_guard = if result.is_ok() {
+                        RuntimeStatus::ResidentHot
+                    } else {
+                        RuntimeStatus::Degraded
+                    };
+                }
+                if let Ok(mut last_error_guard) = last_error.lock() {
+                    *last_error_guard = result.as_ref().err().map(|error| error.message.clone());
+                }
+                if let Err(error) = &result {
+                    tracing::error!("Failed to hot-load model {:?}: {}", model_id, error.message);
+                }
+                let _ = response_tx.send(result);
+            }
+            RuntimeCommand::OffloadModel {
+                model_id,
+                response_tx,
+            } => {
+                let result = offload_model_from_runtime(models, &available_model_paths, model_id)
+                    .map(|_| build_loaded_model_inventory(&available_model_paths, models));
+                if let Ok(mut inventory_guard) = model_inventory.lock() {
+                    *inventory_guard = build_loaded_model_inventory(&available_model_paths, models);
+                }
+                if let Ok(mut status_guard) = status.lock() {
+                    *status_guard = RuntimeStatus::ResidentHot;
+                }
+                if let Ok(mut last_error_guard) = last_error.lock() {
+                    *last_error_guard = result.as_ref().err().map(|error| error.message.clone());
+                }
+                if let Err(error) = &result {
+                    tracing::error!("Failed to offload model {:?}: {}", model_id, error.message);
+                }
+                let _ = response_tx.send(result);
+            }
         }
     }
 

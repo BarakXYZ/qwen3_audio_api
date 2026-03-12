@@ -11,6 +11,8 @@ pub struct ServerConfig {
     pub tts_voice_design_model_path: Option<String>,
     /// Path to Base model directory for voice cloning (TTS_BASE_MODEL_PATH)
     pub tts_base_model_path: Option<String>,
+    /// Model families to preload into memory at startup (TTS_PRELOAD_MODEL_IDS)
+    pub tts_preload_model_ids: HashSet<String>,
     /// Bind address (HOST, default: 127.0.0.1)
     pub host: String,
     /// Port (PORT, default: 8000)
@@ -24,19 +26,55 @@ pub struct ServerConfig {
 impl ServerConfig {
     /// Parse configuration from environment variables.
     pub fn from_env() -> Result<Self, String> {
+        let tts_customvoice_model_path = std::env::var("TTS_CUSTOMVOICE_MODEL_PATH")
+            .ok()
+            .filter(|s| !s.is_empty());
+        let tts_instruction_model_path = std::env::var("TTS_INSTRUCTION_MODEL_PATH")
+            .ok()
+            .filter(|s| !s.is_empty());
+        let tts_voice_design_model_path = std::env::var("TTS_VOICEDESIGN_MODEL_PATH")
+            .ok()
+            .filter(|s| !s.is_empty());
+        let tts_base_model_path = std::env::var("TTS_BASE_MODEL_PATH")
+            .ok()
+            .filter(|s| !s.is_empty());
+
+        let preload_override = std::env::var("TTS_PRELOAD_MODEL_IDS")
+            .ok()
+            .map(|raw| {
+                raw.split(',')
+                    .map(|candidate| candidate.trim().to_string())
+                    .filter(|candidate| !candidate.is_empty())
+                    .collect::<HashSet<_>>()
+            })
+            .unwrap_or_default();
+
+        let mut default_preload_model_ids = HashSet::new();
+        if tts_customvoice_model_path.is_some() {
+            default_preload_model_ids.insert("custom_voice".to_string());
+        }
+        if tts_instruction_model_path.is_some() {
+            default_preload_model_ids.insert("instruction_custom_voice".to_string());
+        }
+        if tts_voice_design_model_path.is_some() {
+            default_preload_model_ids.insert("voice_design".to_string());
+        }
+        if tts_base_model_path.is_some() {
+            default_preload_model_ids.insert("base_voice_clone".to_string());
+        }
+
+        let tts_preload_model_ids = if preload_override.is_empty() {
+            default_preload_model_ids
+        } else {
+            preload_override
+        };
+
         let config = Self {
-            tts_customvoice_model_path: std::env::var("TTS_CUSTOMVOICE_MODEL_PATH")
-                .ok()
-                .filter(|s| !s.is_empty()),
-            tts_instruction_model_path: std::env::var("TTS_INSTRUCTION_MODEL_PATH")
-                .ok()
-                .filter(|s| !s.is_empty()),
-            tts_voice_design_model_path: std::env::var("TTS_VOICEDESIGN_MODEL_PATH")
-                .ok()
-                .filter(|s| !s.is_empty()),
-            tts_base_model_path: std::env::var("TTS_BASE_MODEL_PATH")
-                .ok()
-                .filter(|s| !s.is_empty()),
+            tts_customvoice_model_path,
+            tts_instruction_model_path,
+            tts_voice_design_model_path,
+            tts_base_model_path,
+            tts_preload_model_ids,
             host: std::env::var("HOST").unwrap_or_else(|_| "127.0.0.1".to_string()),
             port: std::env::var("PORT")
                 .ok()
@@ -63,6 +101,25 @@ impl ServerConfig {
 
         if config.queue_capacity == 0 {
             return Err("QUEUE_CAPACITY must be at least 1.".to_string());
+        }
+
+        let valid_preload_model_ids = HashSet::from([
+            "custom_voice".to_string(),
+            "instruction_custom_voice".to_string(),
+            "voice_design".to_string(),
+            "base_voice_clone".to_string(),
+        ]);
+        let invalid_preload_model_ids: Vec<_> = config
+            .tts_preload_model_ids
+            .iter()
+            .filter(|candidate| !valid_preload_model_ids.contains(*candidate))
+            .cloned()
+            .collect();
+        if !invalid_preload_model_ids.is_empty() {
+            return Err(format!(
+                "TTS_PRELOAD_MODEL_IDS contains unsupported model ids: {:?}.",
+                invalid_preload_model_ids
+            ));
         }
 
         Ok(config)

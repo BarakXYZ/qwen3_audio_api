@@ -1,7 +1,9 @@
-use axum::extract::State;
+use axum::extract::{Path, State};
 use axum::Json;
 use serde::Serialize;
 
+use crate::error::ApiError;
+use crate::runtime::ManagedModelId;
 use crate::state::AppState;
 
 #[derive(Serialize)]
@@ -66,4 +68,32 @@ pub async fn list_models(State(state): State<AppState>) -> impl axum::response::
         object: "list",
         data,
     })
+}
+
+pub async fn load_model(
+    State(state): State<AppState>,
+    Path(model_id): Path<String>,
+) -> Result<Json<crate::runtime::LoadedModelInventory>, ApiError> {
+    let runtime = state
+        .tts
+        .as_ref()
+        .ok_or_else(|| ApiError::bad_request("TTS runtime is not loaded on this server."))?;
+    let model_id = ManagedModelId::from_route_id(&model_id)
+        .ok_or_else(|| ApiError::bad_request("Unknown model id."))?;
+    let inventory = runtime.load_model(model_id).await?;
+    Ok(Json(inventory))
+}
+
+pub async fn offload_model(
+    State(state): State<AppState>,
+    Path(model_id): Path<String>,
+) -> Result<Json<crate::runtime::LoadedModelInventory>, ApiError> {
+    let runtime = state
+        .tts
+        .as_ref()
+        .ok_or_else(|| ApiError::bad_request("TTS runtime is not loaded on this server."))?;
+    let model_id = ManagedModelId::from_route_id(&model_id)
+        .ok_or_else(|| ApiError::bad_request("Unknown model id."))?;
+    let inventory = runtime.offload_model(model_id).await?;
+    Ok(Json(inventory))
 }

@@ -86,6 +86,8 @@ async fn main() -> anyhow::Result<()> {
     let app = Router::new()
         .route("/v1/audio/speech", post(routes::speech::speech_handler))
         .route("/v1/models", get(routes::models::list_models))
+        .route("/models/{id}/load", post(routes::models::load_model))
+        .route("/models/{id}/offload", post(routes::models::offload_model))
         .route("/health", get(routes::health::health))
         .route("/health/details", get(routes::health::health_details))
         .route("/metrics", get(routes::health::metrics))
